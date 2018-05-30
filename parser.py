@@ -1,6 +1,5 @@
 #!/usr/bin/env python -OO
 # -*- coding: utf-8 -*-
-
 from __future__ import with_statement
 from bs4 import BeautifulSoup
 from glob import glob
@@ -36,13 +35,15 @@ def main(args):
         );""")
         sql.execute("""CREATE TABLE categories(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT UNIQUE
-        );""")
+            category TEXT UNIQUE);""")
         sql.execute("""CREATE TABLE clues(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game INTEGER,
             round INTEGER,
             value INTEGER,
+            correct INTEGER,
+            order_id INTEGER,
+            dd INTEGER,
             FOREIGN KEY(id) REFERENCES documents(id),
             FOREIGN KEY(game) REFERENCES airdates(game)
         );""")
@@ -79,7 +80,7 @@ def parse_game(f, sql, gid):
     answer = BeautifulSoup(r.find("div", onmouseover=True).get("onmouseover"), "lxml")
     answer = answer.find("em").get_text()
     # False indicates no preset value for a clue
-    insert(sql, [gid, airdate, 3, category, False, text, answer])
+    insert(sql, [gid, airdate, 3, category, False, text, answer, None, None, None])
 
 
 def parse_round(bsoup, sql, rnd, gid, airdate):
@@ -98,11 +99,37 @@ def parse_round(bsoup, sql, rnd, gid, airdate):
     for a in r.find_all("td", class_="clue"):
         is_missing = True if not a.get_text().strip() else False
         if not is_missing:
-            value = a.find("td", class_=re.compile("clue_value")).get_text().lstrip("D: $")
-            text = a.find("td", class_="clue_text").get_text()
-            answer = BeautifulSoup(a.find("div", onmouseover=True).get("onmouseover"), "lxml")
-            answer = answer.find("em", class_="correct_response").get_text()
-            insert(sql, [gid, airdate, rnd, categories[x], value, text, answer])
+            try:
+                value = a.find("td", class_=re.compile("clue_value")).get_text().lstrip("D: $")
+            except Exception:
+                print("couldn't find value, continuing")
+                continue
+            try:
+                text = a.find("td", class_="clue_text").get_text()
+            except Exception:
+                pass
+            try:
+                answer = BeautifulSoup(a.find("div", onmouseover=True).get("onmouseover"), "lxml")
+            except Exception:
+                pass
+            try:
+                correct = answer.find("td", class_="wrong") is not None
+            except Exception:
+                print("couldn't find correctness, continuing")
+                continue
+            try:
+                answer = answer.find("em", class_="correct_response").get_text()
+            except Exception:
+                pass
+            try:
+                dd = a.find("td", class_="clue_value_daily_double") is not None
+            except Exception:
+                print("couldn't find Daily Double, continuing")
+            try:
+                order_id = int(a.find("td", class_="clue_order_number").string)
+            except Exception:
+                pass
+            insert(sql, [gid, airdate, rnd, categories[x], value, text, answer, correct, dd, order_id])
         # Always update x, even if we skip
         # a clue, as this keeps things in order. there
         # are 6 categories, so once we reach the end,
@@ -117,9 +144,9 @@ def parse_round(bsoup, sql, rnd, gid, airdate):
     return True
 
 
-def insert(sql, clue):
+def insert(sql, clue):  # TODO
     """Inserts the given clue into the database."""
-    # Clue is [game, airdate, round, category, value, clue, answer]
+    # Clue is [game, airdate, round, category, value, clue, answer, correctness, daily_double, order_id]
     # Note that at this point, clue[4] is False if round is 3
     if "\\\'" in clue[6]:
         clue[6] = clue[6].replace("\\\'", "'")
@@ -135,7 +162,8 @@ def insert(sql, clue):
     sql.execute("INSERT OR IGNORE INTO categories(category) VALUES(?);", (clue[3], ))
     category_id = sql.execute("SELECT id FROM categories WHERE category=?;", (clue[3], )).fetchone()[0]
     clue_id = sql.execute("INSERT INTO documents(clue, answer) VALUES(?, ?);", (clue[5], clue[6], )).lastrowid
-    sql.execute("INSERT INTO clues(game, round, value) VALUES(?, ?, ?);", (clue[0], clue[2], clue[4], ))
+    sql.execute("INSERT INTO clues(game, round, value, correct, order_id, dd) VALUES(?, ?, ?, ?, ?, ?);", (clue[0],
+                                                        clue[2], clue[4], clue[7], clue[8], clue[9],))  # NOQA
     sql.execute("INSERT INTO classifications VALUES(?, ?)", (clue_id, category_id, ))
 
 
